@@ -728,6 +728,7 @@ static int i2c_hid_power(struct hid_device *hid, int lvl)
 	struct i2c_client *client = hid->driver_data;
 	struct i2c_hid *ihid = i2c_get_clientdata(client);
 	int ret = 0;
+    printk(KERN_ERR "i2c_hid power level %d", lvl);
 
 	i2c_hid_dbg(ihid, "%s lvl:%d\n", __func__, lvl);
 
