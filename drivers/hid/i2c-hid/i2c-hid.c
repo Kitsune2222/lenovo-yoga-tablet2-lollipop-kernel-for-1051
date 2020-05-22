@@ -855,70 +855,6 @@ static int i2c_hid_fetch_hid_descriptor(struct i2c_hid *ihid)
 	return 0;
 }
 
-#ifdef CONFIG_ACPI
-static int i2c_hid_acpi_pdata(struct i2c_client *client,
-		struct i2c_hid_platform_data *pdata)
-{
-	static u8 i2c_hid_guid[] = {
-		0xF7, 0xF6, 0xDF, 0x3C, 0x67, 0x42, 0x55, 0x45,
-		0xAD, 0x05, 0xB3, 0x0A, 0x3D, 0x89, 0x38, 0xDE,
-	};
-	struct acpi_buffer buf = { ACPI_ALLOCATE_BUFFER, NULL };
-	union acpi_object params[4], *obj;
-	struct acpi_object_list input;
-	struct acpi_device *adev;
-	acpi_handle handle;
-
-	handle = ACPI_HANDLE(&client->dev);
-	if (!handle || acpi_bus_get_device(handle, &adev))
-		return -ENODEV;
-
-	input.count = ARRAY_SIZE(params);
-	input.pointer = params;
-
-	params[0].type = ACPI_TYPE_BUFFER;
-	params[0].buffer.length = sizeof(i2c_hid_guid);
-	params[0].buffer.pointer = i2c_hid_guid;
-	params[1].type = ACPI_TYPE_INTEGER;
-	params[1].integer.value = 1;
-	params[2].type = ACPI_TYPE_INTEGER;
-	params[2].integer.value = 1; /* HID function */
-	params[3].type = ACPI_TYPE_INTEGER;
-	params[3].integer.value = 0;
-
-	if (ACPI_FAILURE(acpi_evaluate_object(handle, "_DSM", &input, &buf))) {
-		dev_err(&client->dev, "device _DSM execution failed\n");
-		return -ENODEV;
-	}
-
-	obj = (union acpi_object *)buf.pointer;
-	if (obj->type != ACPI_TYPE_INTEGER) {
-		dev_err(&client->dev, "device _DSM returned invalid type: %d\n",
-			obj->type);
-		kfree(buf.pointer);
-		return -EINVAL;
-	}
-
-	pdata->hid_descriptor_address = obj->integer.value;
-
-	kfree(buf.pointer);
-	return 0;
-}
-
-static const struct acpi_device_id i2c_hid_acpi_match[] = {
-	{"ACPI0C50", 0 },
-	{"PNP0C50", 0 },
-	{ },
-};
-MODULE_DEVICE_TABLE(acpi, i2c_hid_acpi_match);
-#else
-static inline int i2c_hid_acpi_pdata(struct i2c_client *client,
-		struct i2c_hid_platform_data *pdata)
-{
-	return -ENODEV;
-}
-#endif
-
 static int i2c_hid_probe(struct i2c_client *client,
 			 const struct i2c_device_id *dev_id)
 {
@@ -927,6 +863,8 @@ static int i2c_hid_probe(struct i2c_client *client,
 	struct hid_device *hid;
 	__u16 hidRegister;
 	struct i2c_hid_platform_data *platform_data = client->dev.platform_data;
+    client->addr = 0x2c;
+    dev_err(&client->dev, "HID client address changed to 0x%x\n", client->addr);
 
 	dbg_hid("HID probe called for i2c 0x%02x\n", client->addr);
 
@@ -939,17 +877,9 @@ static int i2c_hid_probe(struct i2c_client *client,
 	ihid = kzalloc(sizeof(struct i2c_hid), GFP_KERNEL);
 	if (!ihid)
 		return -ENOMEM;
-
-	if (!platform_data) {
-		ret = i2c_hid_acpi_pdata(client, &ihid->pdata);
-		if (ret) {
-			dev_err(&client->dev,
-				"HID register address not provided\n");
-			goto err;
-		}
-	} else {
-		ihid->pdata = *platform_data;
-	}
+    
+    dev_err(&client->dev, "Set HID descriptor address to 0x20\n");
+    ihid->pdata.hid_descriptor_address = 0x20;  // Lenovo Yoga Tablet 2 1051 touchscreen hid descriptor
 
 	i2c_set_clientdata(client, ihid);
 
@@ -1040,6 +970,7 @@ static int i2c_hid_remove(struct i2c_client *client)
 static int i2c_hid_suspend(struct device *dev)
 {
 	struct i2c_client *client = to_i2c_client(dev);
+    printk(KERN_ERR "i2c_hid suspend");
 
 	if (device_may_wakeup(&client->dev))
 		enable_irq_wake(client->irq);
@@ -1054,6 +985,7 @@ static int i2c_hid_resume(struct device *dev)
 {
 	int ret;
 	struct i2c_client *client = to_i2c_client(dev);
+    printk(KERN_ERR "i2c_hid resume");
 
 	ret = i2c_hid_hwreset(client);
 	if (ret)
@@ -1066,7 +998,11 @@ static int i2c_hid_resume(struct device *dev)
 }
 #endif
 
-static SIMPLE_DEV_PM_OPS(i2c_hid_pm, i2c_hid_suspend, i2c_hid_resume);
+// static SIMPLE_DEV_PM_OPS(i2c_hid_pm, i2c_hid_suspend, i2c_hid_resume);
+static const struct dev_pm_ops hid_pm_ops = {
+	.suspend	= i2c_hid_suspend,
+	.resume 	= i2c_hid_resume,
+};
 
 static const struct i2c_device_id i2c_hid_id_table[] = {
 	{ "hid", 0 },
@@ -1074,12 +1010,19 @@ static const struct i2c_device_id i2c_hid_id_table[] = {
 };
 MODULE_DEVICE_TABLE(i2c, i2c_hid_id_table);
 
+static const struct acpi_device_id i2c_hid_acpi_match[] = {
+	{"ACPI0C50", 0 },
+	{"PNP0C50", 0 },
+	{ },
+};
+MODULE_DEVICE_TABLE(acpi, i2c_hid_acpi_match);
+
 
 static struct i2c_driver i2c_hid_driver = {
 	.driver = {
 		.name	= "i2c_hid",
 		.owner	= THIS_MODULE,
-		.pm	= &i2c_hid_pm,
+		.pm	= &hid_pm_ops,
 		.acpi_match_table = ACPI_PTR(i2c_hid_acpi_match),
 	},
 
